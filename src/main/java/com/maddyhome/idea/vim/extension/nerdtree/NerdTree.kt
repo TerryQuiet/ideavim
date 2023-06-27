@@ -19,6 +19,7 @@ import com.intellij.openapi.actionSystem.PlatformDataKeys
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.ex.FileEditorManagerEx
+import com.intellij.openapi.fileEditor.impl.EditorWindow
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
@@ -117,17 +118,18 @@ import javax.swing.SwingConstants
  */
 internal class NerdTree : VimExtension {
   override fun getName(): String = pluginName
+  var previousWindow: EditorWindow? = null
 
   override fun init() {
     LOG.info("IdeaVim: Initializing NERDTree extension. Disable this extension if you observe a strange behaviour of the project tree. E.g. moving down on 'j'")
 
     registerCommands()
 
-    addCommand("NERDTreeFocus", IjCommandHandler("ActivateProjectToolWindow"))
-    addCommand("NERDTree", IjCommandHandler("ActivateProjectToolWindow"))
+    addCommand("NERDTreeFocus", IjCommandHandlerMy("ActivateProjectToolWindow", this))
+    addCommand("NERDTree", IjCommandHandlerMy("ActivateProjectToolWindow", this))
     addCommand("NERDTreeToggle", ToggleHandler())
     addCommand("NERDTreeClose", CloseHandler())
-    addCommand("NERDTreeFind", IjCommandHandler("SelectInProjectView"))
+    addCommand("NERDTreeFind", IjCommandHandlerMy("SelectInProjectView", this))
     addCommand("NERDTreeRefreshRoot", IjCommandHandler("Synchronize"))
 
     synchronized(monitor) {
@@ -138,6 +140,16 @@ internal class NerdTree : VimExtension {
 
   class IjCommandHandler(private val actionId: String) : CommandAliasHandler {
     override fun execute(command: String, ranges: Ranges, editor: VimEditor, context: ExecutionContext) {
+      callAction(editor, actionId, context)
+    }
+  }
+
+  class IjCommandHandlerMy(private val actionId: String,private val nerdTree: NerdTree) : CommandAliasHandler {
+    override fun execute(command: String, ranges: Ranges, editor: VimEditor, context: ExecutionContext) {
+      fun getCurrentWindow()= editor.ij.project?.let {
+        FileEditorManagerEx.getInstanceEx(it).currentWindow
+      }
+      nerdTree.previousWindow = getCurrentWindow()
       callAction(editor, actionId, context)
     }
   }
@@ -302,11 +314,19 @@ internal class NerdTree : VimExtension {
     registerCommand(
       "NERDTreeMapPreview",
       "go",
-      NerdAction.Code { _, dataContext, _ ->
-        CommonDataKeys.NAVIGATABLE_ARRAY
-          .getData(dataContext)
-          ?.filter { it.canNavigateToSource() }
-          ?.forEach { it.navigate(false) }
+      NerdAction.Code { project, dataContext, event->
+        if (previousWindow != null) {
+          val file = event.getData(CommonDataKeys.VIRTUAL_FILE) ?: return@Code
+          if (file.isDirectory) return@Code
+          FileEditorManagerEx.getInstanceEx(project).openFile(file, previousWindow)
+        } else {
+          CommonDataKeys.NAVIGATABLE_ARRAY
+            .getData(dataContext)
+            ?.filter { it.canNavigateToSource() }
+            ?.forEach {
+              it.navigate(false)
+            }
+        }
       },
     )
     registerCommand(
